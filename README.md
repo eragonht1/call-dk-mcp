@@ -13,6 +13,7 @@ Call DK MCP 是一个基于 Model Context Protocol (MCP) 的服务器，专为AI
 ### 🎯 主要特性
 
 - **交互式call dk系统**: 通过GUI界面收集用户的call dk
+- **🚀 提示词优化功能**: 集成Google Gemini AI，智能优化用户输入的提示词
 - **现代化UI**: 基于PySide6构建，支持暗色主题
 - **跨平台兼容**: 支持Windows、macOS和Linux
 - **MCP协议集成**: 完全兼容Model Context Protocol标准
@@ -75,6 +76,8 @@ call-dk-mcp/
 - **fastmcp**: >=2.0.0 (MCP协议实现)
 - **pyside6**: >=6.8.2.1 (GUI框架)
 - **pillow**: >=10.0.0 (图片处理)
+- **google-genai**: >=1.25.0 (Google Gemini AI API)
+- **python-dotenv**: >=1.1.1 (环境变量管理)
 
 ### 开发工具
 
@@ -91,11 +94,42 @@ call-dk-mcp/
 
 ### 快速开始
 
-本项目作为MCP服务器运行，通常由支持MCP协议的AI客户端调用。
-
+#### 1. 克隆项目
 ```bash
-# 直接运行服务器
+git clone <repository-url>
+cd call-dk-mcp
+```
+
+#### 2. 创建虚拟环境
+```bash
+python -m venv venv
+venv\Scripts\activate  # Windows
+# 或
+source venv/bin/activate  # Linux/Mac
+```
+
+#### 3. 安装依赖
+```bash
+pip install -r requirements.txt
+```
+
+#### 4. 配置环境变量
+```bash
+# 复制环境变量模板
+copy .env.example .env  # Windows
+# 或
+cp .env.example .env    # Linux/Mac
+
+# 编辑.env文件，配置你的Google Gemini API密钥
+```
+
+#### 5. 运行项目
+```bash
+# 作为MCP服务器运行
 python server.py
+
+# 或直接运行GUI界面测试
+python calldk_ui.py
 ```
 
 ### MCP工具使用
@@ -121,7 +155,10 @@ call-dk-mcp/
 ├── README.md               # 项目文档
 ├── calldk_ui.py            # GUI界面实现
 ├── server.py               # MCP服务器
-└── test_server.py          # 测试文件
+├── test_server.py          # 测试文件
+├── prompt_optimizer.py     # 提示词优化模块
+├── .env                    # 环境配置文件
+└── 参考文件/               # 参考实现文件
 ```
 
 ## 开发特性
@@ -166,6 +203,95 @@ call-dk-mcp/
 
 - **项目**: Call DK MCP
 - **许可证**: MIT License
+
+---
+
+## 🚀 提示词优化功能
+
+### 功能概述
+集成了基于Google Gemini 2.5 Flash模型的智能提示词优化功能，能够将用户输入的简单提示词优化为更清晰、具体、有效的提示词。
+
+### 配置步骤
+
+1. **获取Google Gemini API密钥**
+   - 访问 [Google AI Studio](https://aistudio.google.com/app/apikey)
+   - 创建新的API密钥
+   - 复制生成的API密钥
+
+2. **配置环境变量**
+   - 编辑项目根目录下的 `.env` 文件
+   - 将 `GEMINI_API_KEY=your_api_key_here` 中的 `your_api_key_here` 替换为你的实际API密钥
+
+   ```env
+   # Google Gemini API配置
+   GEMINI_API_KEY=AIzaSyC_your_actual_api_key_here
+   GEMINI_MODEL=gemini-2.5-flash
+   GEMINI_TEMPERATURE=0.2
+   GEMINI_MAX_TOKENS=1000
+   ```
+
+3. **安装依赖**
+   ```bash
+   # 激活虚拟环境
+   venv\Scripts\activate  # Windows
+
+   # 安装提示词优化相关依赖
+   pip install google-genai python-dotenv
+   ```
+
+### 使用方法
+
+1. **启动GUI界面**
+   ```bash
+   python calldk_ui.py
+   ```
+
+2. **使用提示词优化**
+   - 在文本输入框中输入原始提示词
+   - 点击 "🚀 提示词优化 (Ctrl+Q)" 按钮或按快捷键 `Ctrl+Q`
+   - 等待AI处理完成（按钮会显示"🧠 优化中..."）
+   - 优化后的提示词会自动替换输入框中的内容
+   - 如需撤销优化，按 `Ctrl+Z` 恢复原始内容
+
+### 优化示例
+
+**原始提示词：**
+```
+写一个关于AI的文章
+```
+
+**优化后的提示词：**
+```
+请撰写一篇关于人工智能技术发展现状与未来趋势的深度分析文章。文章应包含：
+1. AI技术的历史发展脉络
+2. 当前主流AI技术及其应用领域
+3. AI对社会经济的影响分析
+4. 未来AI发展的机遇与挑战
+5. 对AI伦理和监管的思考
+文章字数控制在2000-3000字，语言专业但易懂，适合技术爱好者阅读。
+```
+
+### 功能特点
+
+- **智能优化**: 基于Google Gemini 2.5 Flash模型的AI思考能力
+- **保持原意**: 优化过程中保持用户原始意图不变
+- **增强细节**: 自动添加必要的细节和具体要求
+- **多领域适用**: 适用于各种领域和场景的提示词优化
+- **快捷键支持**: `Ctrl+Q` 快速优化，`Ctrl+Z` 撤销操作
+- **无干扰体验**: 优化完成后无弹窗提示，保持流畅操作
+- **撤销功能**: 支持一键撤销优化，恢复原始输入内容
+
+### 故障排除
+
+**问题：提示词优化按钮显示为灰色不可用**
+- 检查 `.env` 文件中的API密钥是否正确配置
+- 确认已安装 `google-genai` 依赖包
+- 验证网络连接是否正常
+
+**问题：优化失败提示API错误**
+- 检查API密钥是否有效且有足够的配额
+- 确认API密钥有访问Gemini模型的权限
+- 检查网络连接和防火墙设置
 
 ---
 
@@ -262,17 +388,30 @@ call-dk-mcp/
 
 **当前状态：** 功能实现完成，所有测试通过，GUI界面简洁易用
 
-### 项目目录结构
-```
-call-dk-mcp/
-├── server.py              # MCP服务器 - 提供call_dk工具
-├── calldk_ui.py           # GUI界面 - 支持call dk输入和图片上传
-├── test_server.py         # 测试文件 - pytest测试用例
-├── README.md              # 项目文档
-├── images/                # 界面资源文件
-└── venv/                  # 虚拟环境
-```
+### 2025-01-27 提示词优化功能集成
 
----
+**实现内容：**
+1. **提示词优化模块** - 基于Google Gemini 2.5 Flash模型的智能优化功能
+2. **环境配置管理** - 使用.env文件管理API密钥和模型参数
+3. **GUI界面集成** - 在calldk_ui.py中添加"提示词优化"按钮
+4. **异步处理** - 使用QThread避免UI阻塞，提供流畅的用户体验
+5. **错误处理** - 完善的错误提示和状态反馈机制
+
+**技术实现：**
+1. **依赖管理** - 新增google-genai和python-dotenv依赖
+2. **模块封装** - 创建独立的prompt_optimizer.py模块
+3. **线程处理** - 实现OptimizeThread类处理API调用
+4. **配置系统** - 支持多种模型参数和优化选项配置
+5. **用户体验** - 一键优化，自动替换输入内容
+
+**功能特点：**
+- 🧠 AI思考模式：利用Gemini 2.5的内置思考能力
+- 🎯 智能优化：保持原意的同时增强提示词的具体性和有效性
+- ⚡ 快速响应：异步处理确保界面流畅不卡顿
+- 🔧 灵活配置：支持温度、Token数等参数调整
+- 🛡️ 错误处理：友好的错误提示和状态反馈
+
+**当前状态：** 提示词优化功能集成完成，支持一键智能优化用户输入
+
 
 *本项目旨在改善AI辅助开发的用户体验，通过call dk机制让开发者更好地与AI协作。*

@@ -16,8 +16,16 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QTextEdit, QGroupBox,
     QFileDialog, QScrollArea, QFrame, QMessageBox
 )
-from PySide6.QtCore import Qt, QSettings
+from PySide6.QtCore import Qt, QSettings, QThread, Signal
 from PySide6.QtGui import QIcon, QKeyEvent, QPalette, QColor, QPixmap
+
+# 导入提示词优化模块
+try:
+    from prompt_optimizer import get_optimizer, is_optimizer_available, get_optimizer_status
+    OPTIMIZER_AVAILABLE = True
+except ImportError as e:
+    OPTIMIZER_AVAILABLE = False
+    print(f"提示词优化模块导入失败: {e}")
 
 try:
     from PIL import Image, ImageQt
@@ -104,20 +112,56 @@ def get_dark_mode_palette(app: QApplication):
 
 # 移除了kill_tree和get_user_environment函数
 
+class OptimizeThread(QThread):
+    """提示词优化线程"""
+    finished = Signal(str)
+    error = Signal(str)
+
+    def __init__(self, input_text):
+        super().__init__()
+        self.input_text = input_text
+
+    def run(self):
+        try:
+            if not OPTIMIZER_AVAILABLE:
+                self.error.emit("提示词优化模块不可用")
+                return
+
+            optimizer = get_optimizer()
+            if not optimizer.is_available():
+                self.error.emit(optimizer.get_status_message())
+                return
+
+            result = optimizer.optimize_prompt(self.input_text)
+            self.finished.emit(result)
+        except Exception as e:
+            self.error.emit(str(e))
+
 class CalldkTextEdit(QTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
 
     def keyPressEvent(self, event: QKeyEvent):
-        if event.key() == Qt.Key_Return and event.modifiers() == Qt.ControlModifier:
-            # 查找父级 CalldkUI 实例并调用提交
-            parent = self.parent()
-            while parent and not isinstance(parent, CalldkUI):
-                parent = parent.parent()
-            if parent:
+        # 查找父级 CalldkUI 实例
+        parent = self.parent()
+        while parent and not isinstance(parent, CalldkUI):
+            parent = parent.parent()
+
+        if parent:
+            if event.key() == Qt.Key_Return and event.modifiers() == Qt.ControlModifier:
+                # Ctrl+Enter: 提交
                 parent._submit_calldk()
-        else:
-            super().keyPressEvent(event)
+                return
+            elif event.key() == Qt.Key_Q and event.modifiers() == Qt.ControlModifier:
+                # Ctrl+Q: 提示词优化
+                parent._optimize_prompt()
+                return
+            elif event.key() == Qt.Key_Z and event.modifiers() == Qt.ControlModifier:
+                # Ctrl+Z: 撤销优化
+                parent._undo_optimize()
+                return
+
+        super().keyPressEvent(event)
 
 # 移除了LogSignals类
 
@@ -128,10 +172,14 @@ class CalldkUI(QMainWindow):
         self.prompt = prompt
 
         self.calldk_result = None
-        
+
         # 图片相关变量
         self.selected_images: List[ImageData] = []
         self.image_preview_widgets: List[QLabel] = []
+
+        # 提示词优化相关变量
+        self.optimize_thread = None
+        self.original_text_before_optimize = ""  # 用于撤销功能
 
         self.setWindowTitle("call dk")
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -187,7 +235,7 @@ class CalldkUI(QMainWindow):
         padding = self.calldk_text.contentsMargins().top() + self.calldk_text.contentsMargins().bottom() + 5 # 5是额外的垂直填充
         self.calldk_text.setMinimumHeight(5 * row_height + padding)
 
-        self.calldk_text.setPlaceholderText("请在此输入您的call dk (Ctrl+Enter 提交)")
+        self.calldk_text.setPlaceholderText("请在此输入您的call dk (Ctrl+Enter 提交, Ctrl+Q 优化, Ctrl+Z 撤销)")
         
         # 图片上传区域
         image_group = QGroupBox("图片附件")
@@ -232,9 +280,29 @@ class CalldkUI(QMainWindow):
         calldk_layout.addWidget(self.calldk_text)
         calldk_layout.addWidget(image_group)
 
+        # 按钮区域
+        button_layout = QHBoxLayout()
+
+        # 提示词优化按钮
+        self.optimize_button = QPushButton("🚀 提示词优化 (Ctrl+Q)")
+        self.optimize_button.clicked.connect(self._optimize_prompt)
+        self.optimize_button.setToolTip("使用AI优化当前输入的提示词 (Ctrl+Q)")
+
+        # 检查优化器是否可用
+        if not OPTIMIZER_AVAILABLE or not is_optimizer_available():
+            self.optimize_button.setEnabled(False)
+            status_msg = get_optimizer_status() if OPTIMIZER_AVAILABLE else "提示词优化模块不可用"
+            self.optimize_button.setToolTip(status_msg)
+
+        button_layout.addWidget(self.optimize_button)
+
+        # 发送按钮
         submit_button = QPushButton("发送 (Ctrl+Enter)")
         submit_button.clicked.connect(self._submit_calldk)
-        calldk_layout.addWidget(submit_button)
+        button_layout.addWidget(submit_button)
+
+        button_layout.addStretch()  # 添加弹性空间
+        calldk_layout.addLayout(button_layout)
 
         # 设置 calldk_group 的最小高度以容纳其内容
         # 这将基于5行的 calldk_text
@@ -408,6 +476,65 @@ class CalldkUI(QMainWindow):
         if 0 <= index < len(self.selected_images):
             self.selected_images.pop(index)
             self._update_image_preview()
+
+    def _optimize_prompt(self):
+        """优化提示词"""
+        input_text = self.calldk_text.toPlainText().strip()
+
+        if not input_text:
+            QMessageBox.warning(self, "提示", "请先输入要优化的提示词")
+            return
+
+        if not OPTIMIZER_AVAILABLE:
+            QMessageBox.warning(self, "错误", "提示词优化功能不可用，请检查相关依赖是否已安装")
+            return
+
+        # 禁用按钮，显示处理状态
+        self.optimize_button.setEnabled(False)
+        self.optimize_button.setText("🧠 优化中...")
+
+        # 创建并启动优化线程
+        self.optimize_thread = OptimizeThread(input_text)
+        self.optimize_thread.finished.connect(self._on_optimize_finished)
+        self.optimize_thread.error.connect(self._on_optimize_error)
+        self.optimize_thread.start()
+
+    def _on_optimize_finished(self, result: str):
+        """优化完成回调"""
+        # 保存原始文本用于撤销
+        self.original_text_before_optimize = self.calldk_text.toPlainText()
+
+        # 将优化结果替换到输入框
+        self.calldk_text.setPlainText(result)
+
+        # 恢复按钮状态
+        self.optimize_button.setEnabled(True)
+        self.optimize_button.setText("🚀 提示词优化 (Ctrl+Q)")
+
+        # 显示状态提示（不弹窗）
+        self.optimize_button.setToolTip("✅ 优化完成！按Ctrl+Z可撤销")
+
+    def _on_optimize_error(self, error: str):
+        """优化错误回调"""
+        # 恢复按钮状态
+        self.optimize_button.setEnabled(True)
+        self.optimize_button.setText("🚀 提示词优化 (Ctrl+Q)")
+
+        # 显示错误消息
+        QMessageBox.critical(self, "优化失败", f"提示词优化失败：\n{error}")
+
+    def _undo_optimize(self):
+        """撤销提示词优化"""
+        if hasattr(self, 'original_text_before_optimize') and self.original_text_before_optimize:
+            # 恢复原始文本
+            self.calldk_text.setPlainText(self.original_text_before_optimize)
+            # 清空保存的原始文本
+            self.original_text_before_optimize = ""
+            # 更新按钮提示
+            self.optimize_button.setToolTip("使用AI优化当前输入的提示词 (Ctrl+Q)")
+        else:
+            # 如果没有可撤销的内容，显示提示
+            self.optimize_button.setToolTip("没有可撤销的优化操作")
 
     def _submit_calldk(self):
         self.calldk_result = CalldkResult(
