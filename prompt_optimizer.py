@@ -5,7 +5,6 @@
 """
 
 import os
-import logging
 from typing import Optional
 from dotenv import load_dotenv
 
@@ -13,9 +12,8 @@ try:
     from google import genai
     from google.genai import types
     GENAI_AVAILABLE = True
-except ImportError as e:
+except ImportError:
     GENAI_AVAILABLE = False
-    logging.warning(f"Google GenAI导入失败: {e}")
 
 class PromptOptimizer:
     """提示词优化器类"""
@@ -44,18 +42,15 @@ class PromptOptimizer:
     def _initialize_client(self) -> bool:
         """初始化Gemini客户端"""
         if not GENAI_AVAILABLE:
-            logging.error("Google GenAI库未安装")
             return False
-            
+
         if not self.api_key or self.api_key == 'your_api_key_here':
-            logging.warning("API密钥未配置")
             return False
-        
+
         try:
             self.client = genai.Client(api_key=self.api_key)
             return True
-        except Exception as e:
-            logging.error(f"初始化Gemini客户端失败: {e}")
+        except Exception:
             return False
     
     def is_available(self) -> bool:
@@ -92,34 +87,26 @@ class PromptOptimizer:
         if not self.is_available():
             raise RuntimeError(self.get_status_message())
         
-        try:
-            # 创建生成配置
-            generation_config = types.GenerateContentConfig(
-                system_instruction=self.system_instruction,
-                temperature=self.temperature,
-                top_p=self.top_p,
-                max_output_tokens=self.max_tokens,
-                thinking_config={
-                    "thinking_budget": self.thinking_budget,
-                    "include_thoughts": self.include_thoughts
-                }
-            )
-            
-            # 调用API进行优化
-            response = self.client.models.generate_content(
-                model=self.model_name,
-                contents=f"请优化这个提示词：{original_prompt.strip()}",
-                config=generation_config
-            )
-            
-            if response and response.text:
-                return response.text.strip()
-            else:
-                raise RuntimeError("API没有返回有效的优化结果")
-                
-        except Exception as e:
-            logging.error(f"提示词优化失败: {e}")
-            raise Exception(f"优化失败: {str(e)}")
+        # 创建生成配置
+        generation_config = types.GenerateContentConfig(
+            system_instruction=self.system_instruction,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            max_output_tokens=self.max_tokens,
+            thinking_config={
+                "thinking_budget": self.thinking_budget,
+                "include_thoughts": self.include_thoughts
+            }
+        )
+
+        # 调用API进行优化
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=f"请优化这个提示词：{original_prompt.strip()}",
+            config=generation_config
+        )
+
+        return response.text.strip() if response and response.text else ""
 
 # 全局优化器实例
 _optimizer_instance = None
