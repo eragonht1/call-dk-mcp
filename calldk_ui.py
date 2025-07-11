@@ -19,13 +19,9 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QSettings, QThread, Signal
 from PySide6.QtGui import QIcon, QKeyEvent, QPalette, QColor, QPixmap
 
-# 导入提示词优化模块
-try:
-    from prompt_optimizer import get_optimizer, is_optimizer_available, get_optimizer_status
-    OPTIMIZER_AVAILABLE = True
-except ImportError as e:
-    OPTIMIZER_AVAILABLE = False
-    print(f"提示词优化模块导入失败: {e}")
+# 提示词优化模块将异步加载
+OPTIMIZER_AVAILABLE = False
+_optimizer_module = None
 
 try:
     from PIL import Image, ImageQt
@@ -112,6 +108,47 @@ def get_dark_mode_palette(app: QApplication):
 
 # 移除了kill_tree和get_user_environment函数
 
+class OptimizerLoaderThread(QThread):
+    """异步加载提示词优化模块的线程"""
+    loaded = Signal(bool, str)  # 加载成功/失败, 状态消息
+
+    def run(self):
+        global OPTIMIZER_AVAILABLE, _optimizer_module
+        try:
+            # 动态导入提示词优化模块
+            import prompt_optimizer
+            _optimizer_module = prompt_optimizer
+
+            # 检查是否可用
+            if _optimizer_module.is_optimizer_available():
+                OPTIMIZER_AVAILABLE = True
+                self.loaded.emit(True, "提示词优化功能已就绪")
+            else:
+                status = _optimizer_module.get_optimizer_status()
+                self.loaded.emit(False, status)
+        except ImportError as e:
+            self.loaded.emit(False, f"提示词优化模块导入失败: {e}")
+        except Exception as e:
+            self.loaded.emit(False, f"提示词优化模块加载失败: {e}")
+
+def get_optimizer():
+    """获取优化器实例"""
+    if _optimizer_module is None:
+        raise RuntimeError("提示词优化模块尚未加载")
+    return _optimizer_module.get_optimizer()
+
+def is_optimizer_available():
+    """检查优化器是否可用"""
+    if _optimizer_module is None:
+        return False
+    return _optimizer_module.is_optimizer_available()
+
+def get_optimizer_status():
+    """获取优化器状态"""
+    if _optimizer_module is None:
+        return "提示词优化模块尚未加载"
+    return _optimizer_module.get_optimizer_status()
+
 class OptimizeThread(QThread):
     """提示词优化线程"""
     finished = Signal(str)
@@ -180,6 +217,7 @@ class CalldkUI(QMainWindow):
         # 提示词优化相关变量
         self.optimize_thread = None
         self.original_text_before_optimize = ""  # 用于撤销功能
+        self.optimizer_loader_thread = None  # 异步加载线程
 
         self.setWindowTitle("call dk")
         script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -207,6 +245,9 @@ class CalldkUI(QMainWindow):
         
         self._create_ui()
         set_dark_title_bar(self, True)
+
+        # 启动异步加载提示词优化模块
+        self._start_optimizer_loading()
 
     def _format_windows_path(self, path: str) -> str:
         if sys.platform == "win32":
@@ -284,15 +325,10 @@ class CalldkUI(QMainWindow):
         button_layout = QHBoxLayout()
 
         # 提示词优化按钮
-        self.optimize_button = QPushButton("🚀 提示词优化 (Ctrl+Q)")
+        self.optimize_button = QPushButton("⏳ 加载优化模块中... (Ctrl+Q)")
         self.optimize_button.clicked.connect(self._optimize_prompt)
-        self.optimize_button.setToolTip("使用AI优化当前输入的提示词 (Ctrl+Q)")
-
-        # 检查优化器是否可用
-        if not OPTIMIZER_AVAILABLE or not is_optimizer_available():
-            self.optimize_button.setEnabled(False)
-            status_msg = get_optimizer_status() if OPTIMIZER_AVAILABLE else "提示词优化模块不可用"
-            self.optimize_button.setToolTip(status_msg)
+        self.optimize_button.setEnabled(False)  # 初始状态禁用
+        self.optimize_button.setToolTip("正在加载提示词优化模块，请稍候...")
 
         button_layout.addWidget(self.optimize_button)
 
@@ -321,6 +357,28 @@ class CalldkUI(QMainWindow):
         # contact_label.setFont(contact_label_font)
         contact_label.setStyleSheet("font-size: 9pt; color: #cccccc;") # 深色主题的浅灰色
         layout.addWidget(contact_label)
+
+    def _start_optimizer_loading(self):
+        """启动异步加载提示词优化模块"""
+        self.optimizer_loader_thread = OptimizerLoaderThread()
+        self.optimizer_loader_thread.loaded.connect(self._on_optimizer_loaded)
+        self.optimizer_loader_thread.start()
+
+    def _on_optimizer_loaded(self, success: bool, message: str):
+        """处理优化器加载完成事件"""
+        if success:
+            self.optimize_button.setText("🚀 提示词优化 (Ctrl+Q)")
+            self.optimize_button.setEnabled(True)
+            self.optimize_button.setToolTip("使用AI优化当前输入的提示词 (Ctrl+Q)")
+        else:
+            self.optimize_button.setText("❌ 优化不可用 (Ctrl+Q)")
+            self.optimize_button.setEnabled(False)
+            self.optimize_button.setToolTip(message)
+
+        # 清理线程
+        if self.optimizer_loader_thread:
+            self.optimizer_loader_thread.deleteLater()
+            self.optimizer_loader_thread = None
 
     # 移除了命令切换相关的方法
 
@@ -546,6 +604,11 @@ class CalldkUI(QMainWindow):
     # 移除了日志清除和配置保存方法
 
     def closeEvent(self, event):
+        # 清理异步加载线程
+        if self.optimizer_loader_thread and self.optimizer_loader_thread.isRunning():
+            self.optimizer_loader_thread.quit()
+            self.optimizer_loader_thread.wait(1000)  # 等待最多1秒
+
         # 为主窗口保存通用UI设置（几何形状、状态）
         self.settings.beginGroup("MainWindow_General")
         self.settings.setValue("geometry", self.saveGeometry())
